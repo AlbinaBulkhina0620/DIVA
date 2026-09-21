@@ -6,10 +6,10 @@ public class Main {
     public static void main(String[] args) {
         String source = """
                 var x := 42 + 3.14
-                print "Hello"
-                if x > 10 then
+                    print "Hello"
+                    if x > 10 then
                     x += 1
-                end
+                    end
                 """;
 
         Lexer lexer = new Lexer(source);

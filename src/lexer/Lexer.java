@@ -102,7 +102,8 @@ public class Lexer {
         while (!isAtEnd() && Character.isDigit(peek())) advance();
 
         boolean isReal = false;
-        if (!isAtEnd() && peek() == '.' && Character.isDigit(peekNext())) {
+        if (start > 0 && peekAt(start - 1) == '.') {}
+        else if (!isAtEnd() && peek() == '.' && Character.isDigit(peekNext())) {
             isReal = true;
             advance();
             while (!isAtEnd() && Character.isDigit(peek())) advance();
@@ -237,10 +238,16 @@ public class Lexer {
     private boolean isAtEnd() {
         return pos >= source.length();
     }
+    private boolean isAtStart() {
+        return pos <= 0;
+    }
 
     //returns the current character but does not advance the position
     private char peek() {
         return source.charAt(pos);
+    }
+    private char peekAt(int at) {
+        return (at >= 0 && at < source.length() ? source.charAt(at) : '\0');
     }
 
     //returns the next to  current character but does not advance the position
