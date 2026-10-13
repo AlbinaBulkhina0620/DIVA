@@ -250,9 +250,15 @@ public class Lexer {
     private boolean isAtEnd() {
         return pos >= source.length();
     }
+    private boolean isAtStart() {
+        return pos <= 0;
+    }
 
     private char peek() {
         return source.charAt(pos);
+    }
+    private char peekAt(int at) {
+        return (at >= 0 && at < source.length() ? source.charAt(at) : '\0');
     }
 
     private char peekNext() {
