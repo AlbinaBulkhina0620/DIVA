@@ -6,12 +6,16 @@ import java.util.Map;
 
 public class Lexer {
     private final String source;
-    private int pos = 0;    //current position
+    private int pos = 0;
     private int line = 1;
     private int column = 1;
 
-    private final List<Token> tokens = new ArrayList<>(); //ready tokens
-    private final List<String> errors = new ArrayList<>(); //errors
+    private int startPos;
+    private int startLine;
+    private int startColumn;
+
+    private final List<Token> tokens = new ArrayList<>();
+    private final List<String> errors = new ArrayList<>();
 
     private static final Map<String, TokenType> KEYWORDS = Map.ofEntries(
             Map.entry("var",    TokenType.VAR),
@@ -46,12 +50,15 @@ public class Lexer {
     }
 
     public List<Token> tokenize() {
-        while (!isAtEnd()) {  //обработка символов
+        while (!isAtEnd()) {
             skipWhitespaceAndComments();
             if (isAtEnd()) break;
 
+            startPos = pos;
+            startLine = line;
+            startColumn = column;
+            
             char c = peek();
-
             if (Character.isDigit(c)) {
                 number();
             } else if (Character.isLetter(c) || c == '_') {
@@ -69,18 +76,14 @@ public class Lexer {
     private void skipWhitespaceAndComments() {
         while (!isAtEnd()) {
             char c = peek();
-
             if (c == ' ' || c == '\t' || c == '\r') {
                 advance();
             } else if (c == '\n') {
-                // NEWLINE token
                 tokens.add(new Token(TokenType.NEWLINE, "\\n", null, line, column));
                 advance();
             } else if (c == '/' && peekNext() == '/') {
-                // inline comments
                 while (!isAtEnd() && peek() != '\n') advance();
             } else if (c == '/' && peekNext() == '*') {
-                // few lines comments
                 advance(); advance();
                 while (!isAtEnd() && !(peek() == '*' && peekNext() == '/')) {
                     advance();
@@ -88,7 +91,7 @@ public class Lexer {
                 if (!isAtEnd()) {
                     advance(); advance();
                 } else {
-                    error("Unterminated a few lines comment");
+                    error("Unterminated multi-line comment");
                 }
             } else {
                 break;
@@ -96,20 +99,28 @@ public class Lexer {
         }
     }
 
-
-    private void number() {
-        int start = pos;
+        private void number() {
         while (!isAtEnd() && Character.isDigit(peek())) advance();
 
         boolean isReal = false;
-        if (!isAtEnd() && peek() == '.' && Character.isDigit(peekNext())) {
-            isReal = true;
-            advance();
-            while (!isAtEnd() && Character.isDigit(peek())) advance();
+
+        boolean prevWasDot = !tokens.isEmpty() && tokens.get(tokens.size() - 1).type == TokenType.DOT;
+
+        if (!isAtEnd() && peek() == '.' && !prevWasDot) {
+            if (peekNext() == '.') {
+                // Оператор диапазона (например, 1..10), точку не поглощаем
+            } else if (Character.isDigit(peekNext())) {
+                isReal = true;
+                advance(); // поглощаем '.'
+                while (!isAtEnd() && Character.isDigit(peek())) advance();
+            } else {
+                // Завершающая точка (например, "1." перед пробелом или ')')
+                isReal = true;
+                advance(); // поглощаем '.'
+            }
         }
 
-        String text = source.substring(start, pos);
-
+        String text = source.substring(startPos, pos);
         if (isReal) {
             addToken(TokenType.REAL, text, Double.parseDouble(text));
         } else {
@@ -117,24 +128,23 @@ public class Lexer {
         }
     }
 
-
     private void identifierOrKeyword() {
         int start = pos;
         while (!isAtEnd() && (Character.isLetterOrDigit(peek()) || peek() == '_')) {
             advance();
         }
         String text = source.substring(start, pos);
-
         TokenType type = KEYWORDS.getOrDefault(text, TokenType.IDENT);
         addToken(type, text, text);
     }
 
-
     private void string(char quote) {
         int startLine = line;
         int startCol = column;
-        advance(); // open "
+        int start = pos; 
+        advance();
         StringBuilder sb = new StringBuilder();
+        
         while (!isAtEnd() && peek() != quote) {
             if (peek() == '\\') {
                 advance();
@@ -155,12 +165,14 @@ public class Lexer {
                 sb.append(advance());
             }
         }
+        
         if (isAtEnd()) {
             error("Unterminated string starting at " + startLine + ":" + startCol);
+            addToken(TokenType.STRING, source.substring(start, pos), sb.toString());
         } else {
-            advance(); // close "
+            advance(); // consume close quote
+            addToken(TokenType.STRING, source.substring(start, pos), sb.toString());
         }
-        addToken(TokenType.STRING, sb.toString(), sb.toString());
     }
 
     private void symbol() {
@@ -200,8 +212,7 @@ public class Lexer {
             case '*': addToken(TokenType.STAR, "*", null); break;
 
             case '/':
-                if (match('=')) addToken(TokenType.NEQ, "/=", null);
-                else            addToken(TokenType.SLASH, "/", null);
+                addToken(TokenType.SLASH, "/", null);
                 break;
 
             case '%': addToken(TokenType.PERCENT, "%", null); break;
@@ -209,6 +220,11 @@ public class Lexer {
             case '=':
                 if (match('>')) addToken(TokenType.ARROW, "=>", null);
                 else            addToken(TokenType.EQ, "=", null);
+                break;
+
+            case '!':
+                if (match('=')) addToken(TokenType.NEQ, "!=", null);
+                else            error("Unexpected character '!' (did you mean 'not' or '!=')?");
                 break;
 
             case '<':
@@ -231,24 +247,18 @@ public class Lexer {
         }
     }
 
-
-
-
     private boolean isAtEnd() {
         return pos >= source.length();
     }
 
-    //returns the current character but does not advance the position
     private char peek() {
         return source.charAt(pos);
     }
 
-    //returns the next to  current character but does not advance the position
     private char peekNext() {
         return (pos + 1 < source.length()) ? source.charAt(pos + 1) : '\0';
     }
 
-    //line and column update
     private char advance() {
         char c = source.charAt(pos++);
         if (c == '\n') {
@@ -260,7 +270,6 @@ public class Lexer {
         return c;
     }
 
-
     private boolean match(char expected) {
         if (!isAtEnd() && source.charAt(pos) == expected) {
             advance();
@@ -269,7 +278,6 @@ public class Lexer {
         return false;
     }
 
-    //create new Token and add in tokens
     private void addToken(TokenType type, String lexeme, Object value) {
         tokens.add(new Token(type, lexeme, value, line, column - lexeme.length()));
     }
@@ -277,6 +285,7 @@ public class Lexer {
     private void error(String message) {
         errors.add("Lexer error at " + line + ":" + column + " — " + message);
     }
+
     public List<String> getErrors() {
         return errors;
     }
