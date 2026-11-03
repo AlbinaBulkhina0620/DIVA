@@ -15,5 +15,15 @@ public interface Expr {
     class CallExpr implements Expr { public final Expr callee; public final List<Expr> args; public CallExpr(Expr c, List<Expr> a) { callee=c; args=a; } }
     class IndexExpr implements Expr { public final Expr object; public final Expr index; public IndexExpr(Expr o, Expr i) { object=o; index=i; } }
     class MemberExpr implements Expr { public final Expr object; public final Token name; public MemberExpr(Expr o, Token n) { object=o; name=n; } }
-    class LambdaExpr implements Expr { public final List<Token> params; public final Expr body; public LambdaExpr(List<Token> p, Expr b) { params=p; body=b; } }
+    class LambdaExpr implements Expr {
+        public final List<Token> params;
+        public final List<Token> paramTypes;
+        public final Expr body;
+        public LambdaExpr(List<Token> p, Expr b) {
+            this(p, java.util.Collections.nCopies(p.size(), null), b);
+        }
+        public LambdaExpr(List<Token> p, List<Token> types, Expr b) {
+            params=p; paramTypes=types; body=b;
+        }
+    }
 }
