@@ -59,10 +59,11 @@ public class Parser {
         consume(TokenType.LPAREN, "Expect '(' after function name.");
         
         List<Token> params = new ArrayList<>();
+        List<Token> paramTypes = new ArrayList<>();
         if (!check(TokenType.RPAREN)) {
             do {
                 params.add(consume(TokenType.IDENT, "Expect parameter name."));
-                if (match(TokenType.COLON)) consumeType();
+                paramTypes.add(match(TokenType.COLON) ? consumeType() : null);
             } while (match(TokenType.COMMA));
         }
         consume(TokenType.RPAREN, "Expect ')' after parameters.");
@@ -81,13 +82,13 @@ public class Parser {
         }
         consume(TokenType.END, "Expect 'end' after function body.");
         
-        return new Stmt.FuncDeclStmt(name, params, returnType, new Stmt.BlockStmt(body));
+        return new Stmt.FuncDeclStmt(name, params, paramTypes, returnType, new Stmt.BlockStmt(body));
     }
 
     private Token consumeType() {
         if (check(TokenType.TYPE_INT) || check(TokenType.TYPE_REAL) || 
             check(TokenType.TYPE_BOOL) || check(TokenType.TYPE_STRING) || 
-            check(TokenType.TYPE_FUNC) || check(TokenType.IDENT)) {
+            check(TokenType.TYPE_FUNC) || check(TokenType.FUNC) || check(TokenType.IDENT)) {
             return advance();
         }
         throw error(peek(), "Expect type name.");
@@ -354,15 +355,16 @@ public class Parser {
 
     private Expr lambda() {
         List<Token> params = new ArrayList<>();
+        List<Token> paramTypes = new ArrayList<>();
         if (!check(TokenType.RPAREN)) {
             do {
                 params.add(consume(TokenType.IDENT, "Expect parameter name."));
-                if (match(TokenType.COLON)) consumeType();
+                paramTypes.add(match(TokenType.COLON) ? consumeType() : null);
             } while (match(TokenType.COMMA));
         }
         consume(TokenType.RPAREN, "Expect ')' after lambda parameters.");
         consume(TokenType.ARROW, "Expect '=>' after lambda parameters.");
-        return new Expr.LambdaExpr(params, expression());
+        return new Expr.LambdaExpr(params, paramTypes, expression());
     }
 
     // -----------------------------------------

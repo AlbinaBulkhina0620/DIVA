@@ -4,10 +4,15 @@ import java.util.List;
 import lexer.Lexer;
 import lexer.Token;
 import parser.Parser;
+import semantic.SemanticAnalyzer;
+import semantic.Optimizer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.io.IOException;
 
 public class Main {
-    public static void main(String[] args) {
-        String source = """
+    public static void main(String[] args) throws IOException {
+        String source = args.length > 0 ? Files.readString(Path.of(args[0])) : """
             var x := 42
             var flag := true
             
@@ -15,7 +20,7 @@ public class Main {
                 return a + b
             end
             
-            if flag and not false then
+            if 3 < 5 and not false then
                 print "OK"
             else
                 print "FAIL"
@@ -25,7 +30,7 @@ public class Main {
                 print i
             end
             
-            print a.1.2.3
+            print add(5 + 3, 2)
             """;
 
         Lexer lexer = new Lexer(source);
@@ -34,7 +39,7 @@ public class Main {
         if (!lexer.getErrors().isEmpty()) {
             System.out.println("Lexer Errors");
             for (String e : lexer.getErrors()) System.out.println(e);
-            return;
+            System.exit(1);
         }
 
         Parser parser = new Parser(tokens);
@@ -43,15 +48,21 @@ public class Main {
         if (!parser.getErrors().isEmpty()) {
             System.out.println("Parser encountered errors:");
             for (String e : parser.getErrors()) System.out.println(e);
-        } else {
-            System.out.println("Parsing successful!");
+            System.exit(1);
         }
 
-        System.out.println("\nFull Abstract Syntax Tree");
+        List<String> errors = new SemanticAnalyzer().analyze(program);
+        if (!errors.isEmpty()) {
+            for (String error : errors) System.out.println(error);
+            System.exit(1);
+        }
+        System.out.println("Semantic analysis successful!");
+        System.out.println("\nOriginal Abstract Syntax Tree");
         ASTPrinter printer = new ASTPrinter();
         printer.print(program);
-
-        System.out.println("Number of top-level statements: " + program.statements.size());
+        Stmt.Program optimized = new Optimizer().optimize(program);
+        System.out.println("\nOptimized Abstract Syntax Tree");
+        printer.print(optimized);
     }
 
     static class ASTPrinter {

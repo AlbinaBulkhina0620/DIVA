@@ -12,7 +12,19 @@ public interface Stmt {
     class ExitStmt implements Stmt { public final Expr value; public ExitStmt(Expr v) { this.value=v; } }
     class ReturnStmt implements Stmt { public final Expr value; public ReturnStmt(Expr v) { this.value=v; } }
     class PrintStmt implements Stmt { public final Expr value; public PrintStmt(Expr v) { this.value=v; } }
-    class FuncDeclStmt implements Stmt { public final Token name; public final List<Token> params; public final Token returnType; public final Stmt body; public FuncDeclStmt(Token n, List<Token> p, Token r, Stmt b) { name=n; params=p; returnType=r; body=b; } }
+    class FuncDeclStmt implements Stmt {
+        public final Token name;
+        public final List<Token> params;
+        public final List<Token> paramTypes;
+        public final Token returnType;
+        public final Stmt body;
+        public FuncDeclStmt(Token n, List<Token> p, Token r, Stmt b) {
+            this(n, p, java.util.Collections.nCopies(p.size(), null), r, b);
+        }
+        public FuncDeclStmt(Token n, List<Token> p, List<Token> types, Token r, Stmt b) {
+            name=n; params=p; paramTypes=types; returnType=r; body=b;
+        }
+    }
     class ExprStmt implements Stmt { public final Expr expr; public ExprStmt(Expr e) { this.expr=e; } }
     class BlockStmt implements Stmt { public final List<Stmt> statements; public BlockStmt(List<Stmt> s) { statements=s; } }
     class Program implements Stmt { public final List<Stmt> statements; public Program(List<Stmt> s) { statements=s; } }
