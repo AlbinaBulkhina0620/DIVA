@@ -94,6 +94,11 @@ public class Optimizer {
         if (expression instanceof Expr.MemberExpr e) return new Expr.MemberExpr(expression(e.object), e.name);
         if (expression instanceof Expr.PostfixExpr e) return new Expr.PostfixExpr(expression(e.expr), e.op);
         if (expression instanceof Expr.LambdaExpr e) return new Expr.LambdaExpr(e.params, e.paramTypes, expression(e.body));
+        if (expression instanceof Expr.FuncExpr e) { return new Expr.FuncExpr(e.params, e.paramTypes, e.returnType,
+                    e.expressionBody != null ? expression(e.expressionBody) : null,
+                    e.blockBody != null ? statement(e.blockBody) : null
+            );
+        }
         return expression;
     }
 

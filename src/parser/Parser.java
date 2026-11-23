@@ -318,7 +318,8 @@ public class Parser {
         if (match(TokenType.FALSE)) return new Expr.BoolExpr(previous(), false);
         if (match(TokenType.NONE)) return new Expr.NoneExpr(previous());
         if (match(TokenType.IDENT)) return new Expr.IdentExpr(previous());
-        
+        if (match(TokenType.FUNC)) return functionLiteral();
+
         if (match(TokenType.LPAREN)) {
             if (isLambda()) return lambda();
             Expr expr = expression();
@@ -351,6 +352,50 @@ public class Parser {
         } finally {
             current = backtrack;
         }
+    }
+
+    private Expr functionLiteral() {
+        consume(TokenType.LPAREN, "Expect '(' after 'func'.");
+        List<Token> params = new ArrayList<>();
+        List<Token> paramTypes = new ArrayList<>();
+        if (!check(TokenType.RPAREN)) {
+            do {
+                params.add(consume(
+                        TokenType.IDENT,
+                        "Expect parameter name."
+                ));
+                paramTypes.add(match(TokenType.COLON) ? consumeType() : null);
+            } while (match(TokenType.COMMA));
+        }
+        consume(TokenType.RPAREN, "Expect ')' after parameters.");
+
+        Token returnType = null;
+        if (match(TokenType.COLON)) {
+            returnType = consumeType();
+        }
+
+        // case 1: Short function with =>
+        if (match(TokenType.ARROW)) {
+            Expr body = expression();
+            return new Expr.FuncExpr(params, paramTypes, returnType, body, null);
+        }
+
+        // case 2: Multi-line function with is ... end
+        if (match(TokenType.IS)) {
+            skipNewlines();
+            List<Stmt> body = new ArrayList<>();
+            while (!check(TokenType.END) && !isAtEnd()) {
+                Stmt stmt = declaration();
+                if (stmt != null) {
+                    body.add(stmt);
+                }
+                skipNewlines();
+            }
+            consume(TokenType.END, "Expect 'end' after function body.");
+
+            return new Expr.FuncExpr(params, paramTypes, returnType, null, new Stmt.BlockStmt(body));
+        }
+        throw error(peek(), "Expect '=>' or 'is' after function parameters.");
     }
 
     private Expr lambda() {

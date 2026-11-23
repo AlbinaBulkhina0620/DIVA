@@ -16,7 +16,12 @@ public class SemanticAnalyzer {
 
     private static class Symbol {
         final Stmt.FuncDeclStmt function;
-        Symbol(Stmt.FuncDeclStmt function) { this.function = function; }
+        final Expr.FuncExpr functionExpr;
+
+        Symbol(Stmt.FuncDeclStmt function, Expr.FuncExpr functionExpr) {
+            this.function = function;
+            this.functionExpr = functionExpr;
+        }
     }
 
     private final List<String> errors = new ArrayList<>();
@@ -38,10 +43,18 @@ public class SemanticAnalyzer {
     }
 
     private void declare(Token name, Stmt.FuncDeclStmt function) {
+        declare(name, function, null);
+    }
+
+    private void declare(
+            Token name,
+            Stmt.FuncDeclStmt function,
+            Expr.FuncExpr functionExpr
+    ) {
         if (scopes.peek().containsKey(name.lexeme)) {
             error(name, "Duplicate declaration of '" + name.lexeme + "'.");
         } else {
-            scopes.peek().put(name.lexeme, new Symbol(function));
+            scopes.peek().put(name.lexeme, new Symbol(function, functionExpr));
         }
     }
 
@@ -60,10 +73,20 @@ public class SemanticAnalyzer {
             for (Stmt child : s.statements) check(child);
             scopes.pop();
         } else if (statement instanceof Stmt.VarDeclStmt s) {
+            Expr.FuncExpr functionExpr = s.init instanceof Expr.FuncExpr f ? f : null;
+            // Recursive functions must be visible inside their own bodies.
+            if (functionExpr != null) {
+                declare(s.name, null, functionExpr);
+            }
             Type actual = typeOf(s.init);
             Type declared = annotation(s.type);
-            if (s.init != null) compatible(declared, actual, s.name, "Initializer");
-            declare(s.name, null);
+            if (s.init != null) {
+                compatible(declared, actual, s.name, "Initializer");
+            }
+            // Ordinary variables become visible only after initialization.
+            if (functionExpr == null) {
+                declare(s.name, null);
+            }
         } else if (statement instanceof Stmt.AssignStmt s) {
             Type target = writable(s.target, s.op);
             Type value = typeOf(s.value);
@@ -147,8 +170,13 @@ public class SemanticAnalyzer {
         if (expression instanceof Expr.StringExpr) return Type.STRING;
         if (expression instanceof Expr.IdentExpr e) {
             Symbol symbol = lookup(e.name);
-            // Do not infer a mutable variable's type from its initializer.
-            return symbol != null && symbol.function != null ? Type.FUNCTION : Type.UNKNOWN;
+
+            if (symbol != null &&
+                    (symbol.function != null || symbol.functionExpr != null)) {
+                return Type.FUNCTION;
+            }
+
+            return Type.UNKNOWN;
         }
         if (expression instanceof Expr.UnaryExpr e) {
             Type right = typeOf(e.right);
@@ -191,25 +219,75 @@ public class SemanticAnalyzer {
             scopes.pop();
             return Type.FUNCTION;
         }
+        if (expression instanceof Expr.FuncExpr e) {
+            int savedLoops = loopDepth;
+            boolean savedFunction = inFunction;
+            Type savedReturn = returnType;
+
+            loopDepth = 0;
+            inFunction = true;
+            returnType = annotation(e.returnType);
+
+            // Create scope for function parameters and local variables
+            scopes.push(new HashMap<>());
+
+            parameters(e.params, e.paramTypes);
+
+            // Short function: func(x) => x + 1
+            if (e.expressionBody != null) {
+                Type actual = typeOf(e.expressionBody);
+                compatible(returnType, actual, location(e.expressionBody),
+                        "Function result");
+            }
+            // Multi-line function: func(x) is ... end
+            if (e.blockBody instanceof Stmt.BlockStmt block) {
+                // Parameters and local variables share the same scope
+                for (Stmt stmt : block.statements) {
+                    check(stmt);
+                }
+            }
+            scopes.pop();
+            loopDepth = savedLoops;
+            inFunction = savedFunction;
+            returnType = savedReturn;
+            return Type.FUNCTION;
+        }
         if (expression instanceof Expr.CallExpr e) {
             Type callee = typeOf(e.callee);
+
             List<Type> args = new ArrayList<>();
-            for (Expr arg : e.args) args.add(typeOf(arg));
+            for (Expr arg : e.args) {
+                args.add(typeOf(arg));
+            }
+
             require(callee, Type.FUNCTION, location(e.callee), "Call target");
+
             if (e.callee instanceof Expr.IdentExpr id) {
-                // typeOf already reported an undeclared name.
+                // Search for the function in the available scopes
                 for (Map<String, Symbol> scope : scopes) {
                     Symbol symbol = scope.get(id.name.lexeme);
                     if (symbol == null) continue;
+                    // Named function declaration
                     if (symbol.function != null) {
                         Stmt.FuncDeclStmt function = symbol.function;
                         arguments(args, function.paramTypes, id.name);
                         return annotation(function.returnType);
                     }
+                    // Function expression assigned to a variable
+                    if (symbol.functionExpr != null) {
+                        Expr.FuncExpr function = symbol.functionExpr;
+                        arguments(args, function.paramTypes, id.name);
+                        return annotation(function.returnType);
+                    }
                     break;
                 }
-            } else if (e.callee instanceof Expr.LambdaExpr lambda) {
+            }
+            else if (e.callee instanceof Expr.LambdaExpr lambda) {
                 arguments(args, lambda.paramTypes, location(e.callee));
+            }
+            else if (e.callee instanceof Expr.FuncExpr function) {
+                arguments(args, function.paramTypes, location(e.callee));
+                return annotation(function.returnType);
             }
             return Type.UNKNOWN;
         }

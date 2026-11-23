@@ -200,6 +200,36 @@ public class Main {
                 System.out.println("(Lambda");
                 indentLevel++; print(((Expr.LambdaExpr) expr).body); indentLevel--;
                 printIndent(); System.out.println(")");
+            } else if (expr instanceof Expr.FuncExpr e) {
+                System.out.println("(FuncExpr");
+                indentLevel++;
+
+                printIndent();
+                System.out.print("(Params");
+                for (int i = 0; i < e.params.size(); i++) {
+                    System.out.print(" " + e.params.get(i).lexeme);
+                    if (e.paramTypes.get(i) != null) {
+                        System.out.print(":" + e.paramTypes.get(i).lexeme);
+                    }
+                }
+                System.out.println(")");
+
+                if (e.returnType != null) {
+                    printIndent();
+                    System.out.println("(ReturnType " + e.returnType.lexeme + ")");
+                }
+
+                if (e.expressionBody != null) {
+                    print(e.expressionBody);
+                }
+
+                if (e.blockBody != null) {
+                    print(e.blockBody);
+                }
+
+                indentLevel--;
+                printIndent();
+                System.out.println(")");
             } else {
                 System.out.println("(Unknown Expr)");
             }

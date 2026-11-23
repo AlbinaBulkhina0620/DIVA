@@ -26,4 +26,25 @@ public interface Expr {
             params=p; paramTypes=types; body=b;
         }
     }
+    class FuncExpr implements Expr {
+        public final List<Token> params;
+        public final List<Token> paramTypes;
+        public final Token returnType;
+        public final Expr expressionBody;
+        public final Stmt blockBody;
+
+        public FuncExpr(
+                List<Token> params,
+                List<Token> paramTypes,
+                Token returnType,
+                Expr expressionBody,
+                Stmt blockBody
+        ) {
+            this.params = params;
+            this.paramTypes = paramTypes;
+            this.returnType = returnType;
+            this.expressionBody = expressionBody;
+            this.blockBody = blockBody;
+        }
+    }
 }
