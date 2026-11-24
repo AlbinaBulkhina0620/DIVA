@@ -106,34 +106,73 @@ public class Parser {
         return expressionStatement();
     }
 
+
+
     private Stmt ifStatement() {
         Expr condition = expression();
-        consume(TokenType.THEN, "Expect 'then' after if condition.");
-        skipNewlines();
-        
-        List<Stmt> thenBranch = new ArrayList<>();
-        while (!check(TokenType.ELSE) && !check(TokenType.END) && !isAtEnd()) {
-            Stmt stmt = declaration();
-            if (stmt != null) thenBranch.add(stmt);
-            skipNewlines();
+
+        // if condition => statement
+        if (match(TokenType.ARROW)) {
+            Stmt thenBranch = statement();
+
+            return new Stmt.IfStmt(condition, new Stmt.BlockStmt(List.of(thenBranch)), null);
         }
-        
-        List<Stmt> elseBranch = null;
-        if (match(TokenType.ELSE)) {
+        List<Expr> conditions = new ArrayList<>();
+        List<Stmt> branches = new ArrayList<>();
+
+        while (true) {
+            consume(TokenType.THEN, "Expect 'then' after if condition.");
+
             skipNewlines();
-            elseBranch = new ArrayList<>();
-            while (!check(TokenType.END) && !isAtEnd()) {
+            List<Stmt> body = new ArrayList<>();
+            while (!check(TokenType.ELSE) && !check(TokenType.END) && !isAtEnd()) {
                 Stmt stmt = declaration();
-                if (stmt != null) elseBranch.add(stmt);
+                if (stmt != null) {
+                    body.add(stmt);
+                }
                 skipNewlines();
             }
+            conditions.add(condition);
+            branches.add(new Stmt.BlockStmt(body));
+            if (!match(TokenType.ELSE)) {
+                break;
+            }
+            // Another condition in the same if chain
+            if (match(TokenType.IF)) {
+                condition = expression();
+                continue;
+            }
+            skipNewlines();
+            List<Stmt> elseBody = new ArrayList<>();
+            while (!check(TokenType.END) && !isAtEnd()) {
+                Stmt stmt = declaration();
+                if (stmt != null) {
+                    elseBody.add(stmt);
+                }
+                skipNewlines();
+            }
+            branches.add(new Stmt.BlockStmt(elseBody));
+            break;
         }
-        consume(TokenType.END, "Expect 'end' after if statement.");
-        return new Stmt.IfStmt(condition, new Stmt.BlockStmt(thenBranch), elseBranch != null ? new Stmt.BlockStmt(elseBranch) : null);
+        consume(
+                TokenType.END,
+                "Expect 'end' after if statement."
+        );
+        // Build nested IfStmt nodes from the final branch backward
+        Stmt elseBranch = branches.size() > conditions.size()
+                ? branches.get(branches.size() - 1)
+                : null;
+        for (int i = conditions.size() - 1; i >= 0; i--) {
+            elseBranch = new Stmt.IfStmt(conditions.get(i), branches.get(i), elseBranch);
+        }
+        return elseBranch;
     }
+
 
     private Stmt whileStatement() {
         Expr condition = expression();
+        // Optional 'loop' keyword before the body
+        match(TokenType.LOOP);
         skipNewlines();
         List<Stmt> body = parseBlockUntil(TokenType.END, "while loop");
         return new Stmt.WhileStmt(condition, new Stmt.BlockStmt(body));
@@ -143,6 +182,9 @@ public class Parser {
         Token var = consume(TokenType.IDENT, "Expect variable name after 'for'.");
         consume(TokenType.IN, "Expect 'in' after for variable.");
         Expr iterable = expression();
+
+        // Optional 'loop' keyword before the body
+        match(TokenType.LOOP);
         skipNewlines();
         List<Stmt> body = parseBlockUntil(TokenType.END, "for loop");
         return new Stmt.ForStmt(var, iterable, new Stmt.BlockStmt(body));
@@ -249,11 +291,47 @@ public class Parser {
         return expr;
     }
 
+
     private Expr comparison() {
         Expr expr = range();
-        while (match(TokenType.LT, TokenType.GT, TokenType.LE, TokenType.GE)) expr = new Expr.BinaryExpr(expr, previous(), range());
+        while (true) {
+            if (match(TokenType.LT, TokenType.GT, TokenType.LE, TokenType.GE)) {
+                Token operator = previous();
+                expr = new Expr.BinaryExpr(expr, operator, range());
+            } else if (match(TokenType.IS)) {
+                // The right side of 'is' must be a type name
+                Token typeName = peek();
+
+                if (check(TokenType.TYPE_INT)
+                        || check(TokenType.TYPE_REAL)
+                        || check(TokenType.TYPE_STRING)
+                        || check(TokenType.TYPE_BOOL)
+                        || check(TokenType.TYPE_FUNC)
+                        || check(TokenType.FUNC)
+                        || check(TokenType.NONE)
+                        || check(TokenType.IDENT)) {
+                    advance();
+                    String name = typeName.lexeme;
+                    if (!name.equals("int")
+                            && !name.equals("real")
+                            && !name.equals("string")
+                            && !name.equals("bool")
+                            && !name.equals("boolean")
+                            && !name.equals("none")
+                            && !name.equals("array")
+                            && !name.equals("tuple")
+                            && !name.equals("func")) {
+                        throw error(typeName, "Unknown type: " + name);
+                    }
+                    expr = new Expr.IsExpr(expr, typeName);
+                } else {
+                    throw error(typeName, "Expect type name after 'is'.");
+                }
+            } else { break; }
+        }
         return expr;
     }
+
 
     private Expr range() {
         Expr expr = addition();
@@ -274,7 +352,12 @@ public class Parser {
     }
 
     private Expr unary() {
-        if (match(TokenType.MINUS, TokenType.NOT)) return new Expr.UnaryExpr(previous(), unary());
+        if (match(TokenType.PLUS)) {
+            return unary();
+        }
+        if (match(TokenType.MINUS, TokenType.NOT)) {
+            return new Expr.UnaryExpr(previous(), unary());
+        }
         return call();
     }
 
@@ -317,6 +400,34 @@ public class Parser {
         if (match(TokenType.TRUE)) return new Expr.BoolExpr(previous(), true);
         if (match(TokenType.FALSE)) return new Expr.BoolExpr(previous(), false);
         if (match(TokenType.NONE)) return new Expr.NoneExpr(previous());
+        // Array literal: [1, 2, 3]
+        if (match(TokenType.LBRACKET)) {
+            List<Expr> elements = new ArrayList<>();
+            if (!check(TokenType.RBRACKET)) {
+                do {
+                    elements.add(expression());
+                } while (match(TokenType.COMMA));
+            }
+            consume(TokenType.RBRACKET, "Expect ']' after array literal.");
+            return new Expr.ArrayExpr(elements);
+        }
+        // Tuple literal: {a := 1, b := 2, 3}
+        if (match(TokenType.LBRACE)) {
+            List<Expr.TupleExpr.Entry> entries = new ArrayList<>();
+            if (!check(TokenType.RBRACE)) {
+                do {
+                    Token name = null;
+                    if (check(TokenType.IDENT)
+                            && nextType() == TokenType.ASSIGN) {
+                        name = advance();
+                        advance(); // Consume ':='
+                    }
+                    entries.add(new Expr.TupleExpr.Entry(name, expression()));
+                } while (match(TokenType.COMMA));
+            }
+            consume(TokenType.RBRACE, "Expect '}' after tuple literal.");
+            return new Expr.TupleExpr(entries);
+        }
         if (match(TokenType.IDENT)) return new Expr.IdentExpr(previous());
         if (match(TokenType.FUNC)) return functionLiteral();
 
@@ -433,6 +544,11 @@ public class Parser {
 
     private boolean isAtEnd() { return peek().type == TokenType.EOF; }
     private Token peek() { return tokens.get(current); }
+    private TokenType nextType() {
+        return current + 1 < tokens.size()
+                ? tokens.get(current + 1).type
+                : TokenType.EOF;
+    }
     private Token previous() { return tokens.get(current - 1); }
 
     private Token consume(TokenType type, String message) {

@@ -99,32 +99,46 @@ public class Lexer {
         }
     }
 
-        private void number() {
-        while (!isAtEnd() && Character.isDigit(peek())) advance();
 
+    private void number() {
+        while (!isAtEnd() && Character.isDigit(peek())) {
+            advance();
+        }
         boolean isReal = false;
-
-        boolean prevWasDot = !tokens.isEmpty() && tokens.get(tokens.size() - 1).type == TokenType.DOT;
-
+        boolean prevWasDot = !tokens.isEmpty()
+                && tokens.get(tokens.size() - 1).type == TokenType.DOT;
         if (!isAtEnd() && peek() == '.' && !prevWasDot) {
             if (peekNext() == '.') {
-                // Оператор диапазона (например, 1..10), точку не поглощаем
+                // Range operator, e.g. 1..10.
             } else if (Character.isDigit(peekNext())) {
                 isReal = true;
-                advance(); // поглощаем '.'
-                while (!isAtEnd() && Character.isDigit(peek())) advance();
+                advance();
+                while (!isAtEnd() && Character.isDigit(peek())) {
+                    advance();
+                }
             } else {
-                // Завершающая точка (например, "1." перед пробелом или ')')
+                // Real number with trailing dot, e.g. 1.
                 isReal = true;
-                advance(); // поглощаем '.'
+                advance();
             }
         }
-
         String text = source.substring(startPos, pos);
-        if (isReal) {
-            addToken(TokenType.REAL, text, Double.parseDouble(text));
-        } else {
-            addToken(TokenType.INT, text, Integer.parseInt(text));
+
+        try {
+            if (isReal) {
+                double value = Double.parseDouble(text);
+                if (!Double.isFinite(value)) {
+                    error("Real literal out of range: " + text);
+                    return;
+                }
+                addToken(TokenType.REAL, text, value);
+            } else {
+                int value = Integer.parseInt(text);
+                addToken(TokenType.INT, text, value);
+            }
+        } catch (NumberFormatException ex) {
+            error((isReal ? "Real" : "Integer")
+                    + " literal out of range: " + text);
         }
     }
 
@@ -212,7 +226,11 @@ public class Lexer {
             case '*': addToken(TokenType.STAR, "*", null); break;
 
             case '/':
-                addToken(TokenType.SLASH, "/", null);
+                if (match('=')) {
+                    addToken(TokenType.NEQ, "/=", null);
+                } else {
+                    addToken(TokenType.SLASH, "/", null);
+                }
                 break;
 
             case '%': addToken(TokenType.PERCENT, "%", null); break;

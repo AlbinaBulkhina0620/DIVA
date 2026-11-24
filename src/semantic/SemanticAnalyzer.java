@@ -168,6 +168,18 @@ public class SemanticAnalyzer {
         if (expression instanceof Expr.RealExpr) return Type.REAL;
         if (expression instanceof Expr.BoolExpr) return Type.BOOL;
         if (expression instanceof Expr.StringExpr) return Type.STRING;
+        if (expression instanceof Expr.ArrayExpr e) {
+            for (Expr element : e.elements) {
+                typeOf(element);
+            }
+            return Type.UNKNOWN;
+        }
+        if (expression instanceof Expr.TupleExpr e) {
+            for (Expr.TupleExpr.Entry entry : e.entries) {
+                typeOf(entry.value);
+            }
+            return Type.UNKNOWN;
+        }
         if (expression instanceof Expr.IdentExpr e) {
             Symbol symbol = lookup(e.name);
 
@@ -175,7 +187,6 @@ public class SemanticAnalyzer {
                     (symbol.function != null || symbol.functionExpr != null)) {
                 return Type.FUNCTION;
             }
-
             return Type.UNKNOWN;
         }
         if (expression instanceof Expr.UnaryExpr e) {
@@ -186,6 +197,10 @@ public class SemanticAnalyzer {
             }
             numeric(right, e.op);
             return right;
+        }
+        if (expression instanceof Expr.IsExpr e) {
+            typeOf(e.value);
+            return Type.BOOL;
         }
         if (expression instanceof Expr.BinaryExpr e) {
             Type left = typeOf(e.left);

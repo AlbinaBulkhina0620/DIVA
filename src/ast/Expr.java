@@ -47,4 +47,38 @@ public interface Expr {
             this.blockBody = blockBody;
         }
     }
+    class ArrayExpr implements Expr {
+        public final List<Expr> elements;
+
+        public ArrayExpr(List<Expr> elements) {
+            this.elements = elements;
+        }
+    }
+
+    class TupleExpr implements Expr {
+        public static class Entry {
+            public final Token name;
+            public final Expr value;
+
+            public Entry(Token name, Expr value) {
+                this.name = name;
+                this.value = value;
+            }
+        }
+
+        public final List<Entry> entries;
+        public TupleExpr(List<Entry> entries) {
+            this.entries = entries;
+        }
+    }
+    class IsExpr implements Expr {
+        public final Expr value;
+        public final Token typeName;
+
+        public IsExpr(Expr value, Token typeName) {
+            this.value = value;
+            this.typeName = typeName;
+        }
+    }
 }
+

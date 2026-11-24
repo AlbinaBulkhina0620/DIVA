@@ -79,6 +79,9 @@ public class Optimizer {
             }
             return new Expr.UnaryExpr(e.op, right);
         }
+        if (expression instanceof Expr.IsExpr e) {
+            return new Expr.IsExpr(expression(e.value), e.typeName);
+        }
         if (expression instanceof Expr.BinaryExpr e) {
             Expr left = expression(e.left);
             Expr right = expression(e.right);
@@ -98,6 +101,22 @@ public class Optimizer {
                     e.expressionBody != null ? expression(e.expressionBody) : null,
                     e.blockBody != null ? statement(e.blockBody) : null
             );
+        }
+        if (expression instanceof Expr.ArrayExpr e) {
+            List<Expr> elements = new ArrayList<>();
+
+            for (Expr element : e.elements) {
+                elements.add(expression(element));
+            }
+            return new Expr.ArrayExpr(elements);
+        }
+
+        if (expression instanceof Expr.TupleExpr e) {
+            List<Expr.TupleExpr.Entry> entries = new ArrayList<>();
+            for (Expr.TupleExpr.Entry entry : e.entries) {
+                entries.add(new Expr.TupleExpr.Entry(entry.name, expression(entry.value)));
+            }
+            return new Expr.TupleExpr(entries);
         }
         return expression;
     }

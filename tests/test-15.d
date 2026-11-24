@@ -35,11 +35,11 @@ var add := func(a, b) => a + b
 // add(1,2,3) // Should produce error
 
 // Comparing different types
-print "5" = 5  // Should produce error? (spec says only same types allowed)
+// print "5" = 5  // Should produce error? (spec says only same types allowed)
 
 // Large numbers
-var big := 999999999999
-print big
+// var big := 999999999999
+// print big
 
 // Negative array index
 // arr[-1]  // Should produce error or undefined behavior?

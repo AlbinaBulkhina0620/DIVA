@@ -12,57 +12,68 @@ import java.io.IOException;
 
 public class Main {
     public static void main(String[] args) throws IOException {
-        String source = args.length > 0 ? Files.readString(Path.of(args[0])) : """
-            var x := 42
-            var flag := true
-            
-            func add(a: int, b: int): int is
-                return a + b
-            end
-            
-            if 3 < 5 and not false then
-                print "OK"
-            else
-                print "FAIL"
-            end
-            
-            for i in 1..10
-                print i
-            end
-            
-            print add(5 + 3, 2)
-            """;
+        boolean showAst = false;
+        String file = null;
+        for (String arg : args) {
+            if (arg.equals("--ast")) {
+                showAst = true;
+            } else if (file == null) {
+                file = arg;
+            } else {
+                System.err.println("Usage: java -cp out Main [--ast] [file.d]");
+                System.exit(2);
+                return;
+            }
+        }
+
+        String source = file == null ? """
+                var x := 42
+                print x
+                """ : Files.readString(Path.of(file));
 
         Lexer lexer = new Lexer(source);
         List<Token> tokens = lexer.tokenize();
-        
         if (!lexer.getErrors().isEmpty()) {
-            System.out.println("Lexer Errors");
-            for (String e : lexer.getErrors()) System.out.println(e);
+            lexer.getErrors().forEach(System.err::println);
             System.exit(1);
+            return;
         }
 
         Parser parser = new Parser(tokens);
         Stmt.Program program = parser.parse();
-        
         if (!parser.getErrors().isEmpty()) {
-            System.out.println("Parser encountered errors:");
-            for (String e : parser.getErrors()) System.out.println(e);
+            parser.getErrors().forEach(System.err::println);
             System.exit(1);
+            return;
         }
 
         List<String> errors = new SemanticAnalyzer().analyze(program);
         if (!errors.isEmpty()) {
-            for (String error : errors) System.out.println(error);
+            errors.forEach(System.err::println);
             System.exit(1);
+            return;
         }
-        System.out.println("Semantic analysis successful!");
-        System.out.println("\nOriginal Abstract Syntax Tree");
-        ASTPrinter printer = new ASTPrinter();
-        printer.print(program);
+
         Stmt.Program optimized = new Optimizer().optimize(program);
-        System.out.println("\nOptimized Abstract Syntax Tree");
-        printer.print(optimized);
+        if (showAst) {
+            ASTPrinter printer = new ASTPrinter();
+            System.out.println("Original Abstract Syntax Tree");
+            printer.print(program);
+            System.out.println("Optimized Abstract Syntax Tree");
+            printer.print(optimized);
+            return;
+        }
+
+        try {
+            new runtime.Interpreter().interpret(optimized);
+        } catch (runtime.RuntimeError error) {
+            System.err.println(error.getMessage());
+            System.exit(1);
+        } catch (RuntimeException error) {
+            // Environment currently uses ordinary RuntimeException for name errors.
+            // Avoid concealing unrelated Java bugs as language-level errors.
+            throw error;
+        }
     }
 
     static class ASTPrinter {
@@ -75,7 +86,7 @@ public class Main {
         public void print(Stmt stmt) {
             if (stmt == null) { printIndent(); System.out.println("<null>"); return; }
             printIndent();
-            
+
             // Handle the root Program node
             if (stmt instanceof Stmt.Program) {
                 System.out.println("(Program");
@@ -151,7 +162,7 @@ public class Main {
         public void print(Expr expr) {
             if (expr == null) { printIndent(); System.out.println("<null>"); return; }
             printIndent();
-            
+
             if (expr instanceof Expr.IntExpr) {
                 System.out.println("(Int " + ((Expr.IntExpr) expr).token.lexeme + ")");
             } else if (expr instanceof Expr.RealExpr) {
@@ -201,35 +212,31 @@ public class Main {
                 indentLevel++; print(((Expr.LambdaExpr) expr).body); indentLevel--;
                 printIndent(); System.out.println(")");
             } else if (expr instanceof Expr.FuncExpr e) {
-                System.out.println("(FuncExpr");
+                System.out.println("(FuncExpr " + e.params.size() + " params");
                 indentLevel++;
-
-                printIndent();
-                System.out.print("(Params");
-                for (int i = 0; i < e.params.size(); i++) {
-                    System.out.print(" " + e.params.get(i).lexeme);
-                    if (e.paramTypes.get(i) != null) {
-                        System.out.print(":" + e.paramTypes.get(i).lexeme);
-                    }
-                }
-                System.out.println(")");
-
-                if (e.returnType != null) {
-                    printIndent();
-                    System.out.println("(ReturnType " + e.returnType.lexeme + ")");
-                }
-
-                if (e.expressionBody != null) {
-                    print(e.expressionBody);
-                }
-
-                if (e.blockBody != null) {
-                    print(e.blockBody);
-                }
-
+                if (e.expressionBody != null) print(e.expressionBody);
+                if (e.blockBody != null) print(e.blockBody);
                 indentLevel--;
-                printIndent();
-                System.out.println(")");
+                printIndent(); System.out.println(")");
+            } else if (expr instanceof Expr.ArrayExpr e) {
+                System.out.println("(Array");
+                indentLevel++;
+                for (Expr element : e.elements) print(element);
+                indentLevel--;
+                printIndent(); System.out.println(")");
+            } else if (expr instanceof Expr.TupleExpr e) {
+                System.out.println("(Tuple");
+                indentLevel++;
+                for (Expr.TupleExpr.Entry entry : e.entries) {
+                    printIndent();
+                    System.out.println("(Entry " + (entry.name == null ? "" : entry.name.lexeme));
+                    indentLevel++;
+                    print(entry.value);
+                    indentLevel--;
+                    printIndent(); System.out.println(")");
+                }
+                indentLevel--;
+                printIndent(); System.out.println(")");
             } else {
                 System.out.println("(Unknown Expr)");
             }
