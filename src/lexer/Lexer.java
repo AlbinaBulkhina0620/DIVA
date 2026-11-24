@@ -303,7 +303,7 @@ public class Lexer {
     }
 
     private void addToken(TokenType type, String lexeme, Object value) {
-        tokens.add(new Token(type, lexeme, value, line, column - lexeme.length()));
+        tokens.add(new Token(type, lexeme, value, startLine, startColumn));
     }
 
     private void error(String message) {

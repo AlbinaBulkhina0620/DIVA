@@ -6,7 +6,6 @@ import lexer.Token;
 import lexer.TokenType;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -37,23 +36,26 @@ public class Interpreter {
         final Map<String, Integer> names;
 
         TupleValue(List<Object> values, Map<String, Integer> names) {
-            this.values = List.copyOf(values.stream().map(x -> x == null ? NoneSentinel.VALUE : x).toList());
+            // Unlike List.copyOf, this accepts the language's none (null) value.
+            this.values = java.util.Collections.unmodifiableList(new ArrayList<>(values));
             this.names = Map.copyOf(names);
         }
 
         Object at(int index) {
-            Object value = values.get(index);
-            return value == NoneSentinel.VALUE ? null : value;
+            return values.get(index);
         }
     }
 
-    // List.copyOf doesn't accept null; a tuple may contain the language's none value
-    private enum NoneSentinel { VALUE }
-
 
     public void interpret(Stmt.Program program) {
-        for (Stmt statement : program.statements) {
-            execute(statement);
+        try {
+            for (Stmt statement : program.statements) {
+                execute(statement);
+            }
+        } catch (ExitSignal signal) {
+            throw new RuntimeError("Exit is only allowed inside a loop.");
+        } catch (ReturnSignal signal) {
+            throw new RuntimeError("Return is only allowed inside a function.");
         }
     }
 
@@ -107,6 +109,10 @@ public class Interpreter {
     }
 
     private void execute(Stmt stmt) {
+        if (stmt instanceof Stmt.DeclarationGroup s) {
+            for (Stmt declaration : s.declarations) execute(declaration);
+            return;
+        }
         if (stmt instanceof Stmt.BlockStmt s) {
             executeBlock(s, new Environment(environment));
             return;
@@ -146,47 +152,28 @@ public class Interpreter {
 
         if (stmt instanceof Stmt.ForStmt s) {
             Object iterable = evaluate(s.iterable);
+            if (iterable instanceof TupleValue tuple) {
+                List<Object> elements = new ArrayList<>();
+                for (int i = 0; i < tuple.values.size(); i++) elements.add(tuple.at(i));
+                iterable = elements;
+            }
 
             // Support integer ranges and arrays
             if (!(iterable instanceof IntRange)
                     && !(iterable instanceof List<?>)) {
                 throw new RuntimeError(s.var,
-                        "For expects an integer range or an array.");
+                        "For expects an integer range, array or tuple.");
             }
-            Environment previous = environment;
-            try {
-                environment = new Environment(previous);
-                if (iterable instanceof IntRange range) {
-                    // for i in 1..5
-                    environment.define(s.var.lexeme, range.start());
-
-                    int step = range.start() <= range.end() ? 1 : -1;
-                    int i = range.start();
-
-                    while (true) {
-                        environment.assign(s.var.lexeme, i);
-                        try {
-                            execute(s.body);
-                        } catch (ExitSignal ignored) {
-                            break;
-                        }
-                        if (i == range.end()) break;
-                        i += step;
-                    }
-                } else if (iterable instanceof List<?> array) {
-                    // for val in [1, 2, 3]
-                    environment.define(s.var.lexeme, null);
-                    for (Object element : array) {
-                        environment.assign(s.var.lexeme, element);
-                        try {
-                            execute(s.body);
-                        } catch (ExitSignal ignored) {
-                            break;
-                        }
-                    }
+            if (iterable instanceof IntRange range) {
+                int step = range.start() <= range.end() ? 1 : -1;
+                for (int i = range.start(); ; i += step) {
+                    if (!executeIteration(s, i) || i == range.end()) break;
                 }
-            } finally {
-                environment = previous;
+            } else if (iterable instanceof List<?> array) {
+                // Snapshot the values so mutation during iteration is deterministic.
+                for (Object element : new ArrayList<>(array)) {
+                    if (!executeIteration(s, element)) break;
+                }
             }
             return;
         }
@@ -203,13 +190,19 @@ public class Interpreter {
         }
 
         if (stmt instanceof Stmt.FuncDeclStmt s) {
-            environment.define(s.name.lexeme, new UserFunction(s, environment));
+            UserFunction function = new UserFunction(s, environment.capture());
+            environment.define(s.name.lexeme, function);
+            function.closure.captureBinding(s.name.lexeme, environment);
             return;
         }
 
         if (stmt instanceof Stmt.VarDeclStmt s) {
             Object value = s.init != null ? evaluate(s.init) : null;
             environment.define(s.name.lexeme, value);
+            if (value instanceof UserFunction function
+                    && (s.init instanceof Expr.FuncExpr || s.init instanceof Expr.LambdaExpr)) {
+                function.closure.captureBinding(s.name.lexeme, environment);
+            }
             return;
         }
 
@@ -217,10 +210,11 @@ public class Interpreter {
         if (stmt instanceof Stmt.AssignStmt s) {
 
             if (s.target instanceof Expr.IdentExpr id) {
+                Object old = s.op.type == TokenType.ASSIGN ? null : environment.get(id.name.lexeme);
                 Object value = evaluate(s.value);
 
                 if (s.op.type != TokenType.ASSIGN) {
-                    value = evaluateBinary(environment.get(id.name.lexeme), assignmentOperator(s.op), value, s.op);
+                    value = evaluateBinary(old, assignmentOperator(s.op), value, s.op);
                 }
                 environment.assign(id.name.lexeme, value);
                 return;
@@ -228,28 +222,22 @@ public class Interpreter {
             // Array element assignment
             if (s.target instanceof Expr.IndexExpr index) {
                 List<Object> array = requireArray(evaluate(index.object), s.op);
-                Object indexValue = evaluate(index.index);
-
-                if (!(indexValue instanceof Integer)) {
-                    throw new RuntimeError(s.op, "Array index must be an integer.");
+                Object key = evaluate(index.index);
+                if (!(key instanceof Integer position)) {
+                    throw new RuntimeError(s.op, "Index must be an integer.");
                 }
-                int position = (Integer) indexValue;
                 if (position < 1) {
-                    throw new RuntimeError(s.op, "Array index must be at least 1.");
+                    throw new RuntimeError(s.op, "Index " + position + " out of bounds (indices start at 1).");
                 }
+                Object old = s.op.type == TokenType.ASSIGN ? null
+                        : array.get(arrayIndex(position, array.size(), s.op));
                 Object value = evaluate(s.value);
-                if (s.op.type == TokenType.ASSIGN) {
-                    // grow the array if necessary
-                    while (array.size() < position) {
-                        array.add(null);
-                    }
-                    array.set(position - 1, value);
+                if (s.op.type != TokenType.ASSIGN) {
+                    value = evaluateBinary(old, assignmentOperator(s.op), value, s.op);
                 } else {
-                    // element must already exist
-                    int i = arrayIndex(position, array.size(), s.op);
-                    value = evaluateBinary(array.get(i), assignmentOperator(s.op), value, s.op);
-                    array.set(i, value);
+                    while (array.size() < position) array.add(null);
                 }
+                array.set(position - 1, value);
                 return;
             }
             throw new RuntimeError(s.op, "Assignment target must be a variable or array element "
@@ -257,7 +245,9 @@ public class Interpreter {
         }
 
         if (stmt instanceof Stmt.PrintStmt s) {
-            System.out.println(stringify(evaluate(s.value)));
+            List<String> values = new ArrayList<>();
+            for (Expr value : s.values) values.add(stringify(evaluate(value)));
+            System.out.println(String.join(" ", values));
             return;
         }
 
@@ -268,6 +258,20 @@ public class Interpreter {
         throw new RuntimeError("Unsupported statement: " + stmt.getClass().getSimpleName());
     }
 
+    private boolean executeIteration(Stmt.ForStmt loop, Object value) {
+        Environment previous = environment;
+        try {
+            environment = new Environment(previous);
+            if (loop.var != null) environment.define(loop.var.lexeme, value);
+            execute(loop.body);
+            return true;
+        } catch (ExitSignal ignored) {
+            return false;
+        } finally {
+            environment = previous;
+        }
+    }
+
     public Object evaluate(Expr expr) {
         if (expr instanceof Expr.IntExpr e) return e.token.value;
         if (expr instanceof Expr.RealExpr e) return e.token.value;
@@ -276,11 +280,11 @@ public class Interpreter {
         if (expr instanceof Expr.NoneExpr) return null;
 
         if (expr instanceof Expr.FuncExpr e) {
-            return new UserFunction(e, environment);
+            return new UserFunction(e, environment.capture());
         }
 
         if (expr instanceof Expr.LambdaExpr e) {
-            return new UserFunction(e, environment);
+            return new UserFunction(e, environment.capture());
         }
 
         if (expr instanceof Expr.CallExpr e) {
@@ -351,9 +355,9 @@ public class Interpreter {
             }
             if (e.expr instanceof Expr.IndexExpr index) {
                 List<Object> array = requireArray(evaluate(index.object), e.op);
-                int i = arrayIndex(evaluate(index.index), array.size(), e.op);
-                Object old = array.get(i);
-                array.set(i, increment(old, e.op));
+                int position = arrayIndex(evaluate(index.index), array.size(), e.op);
+                Object old = array.get(position);
+                array.set(position, increment(old, e.op));
                 return old;
             }
             throw new RuntimeError(e.op, "Postfix target must be a variable or array element.");
@@ -362,6 +366,10 @@ public class Interpreter {
 
         if (expr instanceof Expr.UnaryExpr e) {
             Object right = evaluate(e.right);
+            if (e.op.type == TokenType.PLUS) {
+                if (right instanceof Number) return right;
+                throw new RuntimeError(e.op, "Operand must be numeric.");
+            }
             if (e.op.type == TokenType.MINUS) {
                 if (right instanceof Integer n) {
                     if (n == Integer.MIN_VALUE) {
@@ -410,9 +418,10 @@ public class Interpreter {
 
             Object right = evaluate(e.right);
             if (e.op.type == TokenType.EQ || e.op.type == TokenType.NEQ) {
-                boolean equal = left instanceof Number a && right instanceof Number b
-                        ? a.doubleValue() == b.doubleValue()
-                        : Objects.equals(left, right);
+                if (!(left instanceof Number a) || !(right instanceof Number b)) {
+                    throw new RuntimeError(e.op, "Operands must be numeric.");
+                }
+                boolean equal = a.doubleValue() == b.doubleValue();
                 return e.op.type == TokenType.EQ ? equal : !equal;
             }
             if (e.op.type == TokenType.XOR) {
@@ -424,6 +433,12 @@ public class Interpreter {
                 }
                 return new IntRange(start, end);
             }
+            if (e.op.type == TokenType.PIPE) {
+                if (!(right instanceof UserFunction function)) throw new RuntimeError(e.op, "Pipe target is not a function.");
+                List<Object> arguments = new ArrayList<>();
+                arguments.add(left);
+                return function.call(this, arguments);
+            }
             return evaluateBinary(left, e.op.type, right, e.op);
         }
 
@@ -431,6 +446,9 @@ public class Interpreter {
     }
 
     private Object evaluateBinary(Object left, TokenType operator, Object right, Token token) {
+        if (operator == TokenType.PERCENT && (!(left instanceof Integer) || !(right instanceof Integer))) {
+            throw new RuntimeError(token, "Remainder operands must be integers.");
+        }
         if (operator == TokenType.PLUS && left instanceof String a && right instanceof String b) {
             return a + b;
         }
@@ -530,35 +548,45 @@ public class Interpreter {
     }
 
     private String stringify(Object value) {
-        if (value == null) return "none";
-        if (value instanceof Double d && d == 0.0) return "0.0";
-        if (value instanceof List<?> items) {
-            List<String> parts = new ArrayList<>();
-            for (Object item : items) parts.add(collectionValue(item));
-            return "[" + String.join(", ", parts) + "]";
-        }
-        if (value instanceof TupleValue tuple) {
-            List<String> parts = new ArrayList<>();
-            for (int i = 0; i < tuple.values.size(); i++) {
-                String name = null;
-                for (Map.Entry<String, Integer> entry : tuple.names.entrySet()) {
-                    if (entry.getValue() == i) { name = entry.getKey(); break; }
-                }
-                parts.add((name == null ? "" : name + " := ") + collectionValue(tuple.at(i)));
-            }
-            return "{" + String.join(", ", parts) + "}";
-        }
-        return value.toString();
+        return stringify(value, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
     }
 
-    private String collectionValue(Object value) {
+    private String stringify(Object value, java.util.Set<Object> active) {
+        if (value == null) return "none";
+        if (value instanceof Double d && d == 0.0) return "0.0";
+        boolean aggregate = value instanceof List<?> || value instanceof TupleValue;
+        if (aggregate && !active.add(value)) return "<cycle>";
+        try {
+            if (value instanceof List<?> items) {
+                List<String> parts = new ArrayList<>();
+                for (Object item : items) parts.add(collectionValue(item, active));
+                return "[" + String.join(", ", parts) + "]";
+            }
+            if (value instanceof TupleValue tuple) {
+                List<String> parts = new ArrayList<>();
+                for (int i = 0; i < tuple.values.size(); i++) {
+                    String name = null;
+                    for (Map.Entry<String, Integer> entry : tuple.names.entrySet()) {
+                        if (entry.getValue() == i) { name = entry.getKey(); break; }
+                    }
+                    parts.add((name == null ? "" : name + " := ") + collectionValue(tuple.at(i), active));
+                }
+                return "{" + String.join(", ", parts) + "}";
+            }
+            return value.toString();
+        } finally {
+            if (aggregate) active.remove(value);
+        }
+    }
+
+    private String collectionValue(Object value, java.util.Set<Object> active) {
         if (value instanceof String str) return "\"" + str.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
-        return stringify(value);
+        return stringify(value, active);
     }
 
     private List<Object> requireArray(Object object, Token at) {
-        if (!(object instanceof List<?> list)) throw new RuntimeError(at, "Index assignment requires an array.");
-        @SuppressWarnings("unchecked") List<Object> result = (List<Object>) list;
+        if (!(object instanceof List<?> array)) throw new RuntimeError(at, "Index assignment requires an array.");
+        @SuppressWarnings("unchecked") List<Object> result = (List<Object>) array;
         return result;
     }
 

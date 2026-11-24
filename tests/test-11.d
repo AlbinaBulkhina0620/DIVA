@@ -24,7 +24,7 @@ print arr1  // [1, 99, 3]
 
 // Dynamic array growth
 arr1[10] := 42
-print arr1  // [1, 99, 3, none, ..., 42]
+print arr1  // [1, 99, 3, none, none, none, none, none, none, 42]
 
 // Array concatenation
 var a := [1, 2]
@@ -34,4 +34,4 @@ print c  // [1, 2, 3, 4]
 
 // Nested arrays
 var nested := [[1, 2], [3, 4], [5, 6]]
-print nested[1][2]  // 4
+print nested[1][2]  // 2

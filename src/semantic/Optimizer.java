@@ -25,10 +25,15 @@ public class Optimizer {
 
     private Stmt statement(Stmt statement) {
         if (statement == null) return null;
+        if (statement instanceof Stmt.DeclarationGroup s) return new Stmt.DeclarationGroup(statements(s.declarations));
         if (statement instanceof Stmt.BlockStmt s) return new Stmt.BlockStmt(statements(s.statements));
         if (statement instanceof Stmt.VarDeclStmt s) return new Stmt.VarDeclStmt(s.name, s.type, expression(s.init));
         if (statement instanceof Stmt.AssignStmt s) return new Stmt.AssignStmt(expression(s.target), s.op, expression(s.value));
-        if (statement instanceof Stmt.PrintStmt s) return new Stmt.PrintStmt(expression(s.value));
+        if (statement instanceof Stmt.PrintStmt s) {
+            List<Expr> values = new ArrayList<>();
+            for (Expr value : s.values) values.add(expression(value));
+            return new Stmt.PrintStmt(values);
+        }
         if (statement instanceof Stmt.ExprStmt s) return new Stmt.ExprStmt(expression(s.expr));
         if (statement instanceof Stmt.ReturnStmt s) return new Stmt.ReturnStmt(expression(s.value));
         if (statement instanceof Stmt.ExitStmt s) return new Stmt.ExitStmt(expression(s.value));
