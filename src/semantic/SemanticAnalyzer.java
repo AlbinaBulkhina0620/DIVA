@@ -16,7 +16,7 @@ public class SemanticAnalyzer {
 
     private static class Symbol {
         final Stmt.FuncDeclStmt function;
-        final Expr.FuncExpr functionExpr;
+        Expr.FuncExpr functionExpr;
 
         Symbol(Stmt.FuncDeclStmt function, Expr.FuncExpr functionExpr) {
             this.function = function;
@@ -58,17 +58,25 @@ public class SemanticAnalyzer {
         }
     }
 
-    private Symbol lookup(Token name) {
+    private Symbol findSymbol(Token name) {
         for (Map<String, Symbol> scope : scopes) {
-            if (scope.containsKey(name.lexeme)) return scope.get(name.lexeme);
+            Symbol symbol = scope.get(name.lexeme);
+            if (symbol != null) return symbol;
         }
-        error(name, "Undeclared name '" + name.lexeme + "'.");
         return null;
+    }
+
+    private Symbol lookup(Token name) {
+        Symbol symbol = findSymbol(name);
+        if (symbol == null) error(name, "Undeclared name '" + name.lexeme + "'.");
+        return symbol;
     }
 
     private void check(Stmt statement) {
         if (statement == null) return;
-        if (statement instanceof Stmt.BlockStmt s) {
+        if (statement instanceof Stmt.DeclarationGroup s) {
+            for (Stmt declaration : s.declarations) check(declaration);
+        } else if (statement instanceof Stmt.BlockStmt s) {
             scopes.push(new HashMap<>());
             for (Stmt child : s.statements) check(child);
             scopes.pop();
@@ -90,6 +98,11 @@ public class SemanticAnalyzer {
         } else if (statement instanceof Stmt.AssignStmt s) {
             Type target = writable(s.target, s.op);
             Type value = typeOf(s.value);
+            // A mutable function variable can receive a function of another arity.
+            if (s.target instanceof Expr.IdentExpr id) {
+                Symbol symbol = findSymbol(id.name);
+                if (symbol != null) symbol.functionExpr = null;
+            }
             if (s.op.type != TokenType.ASSIGN) {
                 binary(s.op.type == TokenType.PLUS_ASSIGN ? TokenType.PLUS : TokenType.MINUS,
                         target, value, s.op);
@@ -114,7 +127,7 @@ public class SemanticAnalyzer {
                 error(s.var, "For expects a range or an aggregate.");
             }
             scopes.push(new HashMap<>());
-            declare(s.var, null);
+            if (s.var != null) declare(s.var, null);
             loopDepth++;
             check(s.body);
             loopDepth--;
@@ -132,24 +145,9 @@ public class SemanticAnalyzer {
         } else if (statement instanceof Stmt.FuncDeclStmt s) {
             // Named declarations are stable bindings; recursion is visible in the body.
             declare(s.name, s);
-            int savedLoops = loopDepth;
-            boolean savedFunction = inFunction;
-            Type savedReturn = returnType;
-            loopDepth = 0;
-            inFunction = true;
-            returnType = annotation(s.returnType);
-            scopes.push(new HashMap<>());
-            parameters(s.params, s.paramTypes);
-            // Parameters and top-level locals share a function scope.
-            if (s.body instanceof Stmt.BlockStmt body) {
-                for (Stmt child : body.statements) check(child);
-            } else check(s.body);
-            scopes.pop();
-            loopDepth = savedLoops;
-            inFunction = savedFunction;
-            returnType = savedReturn;
+            checkFunction(s.params, s.paramTypes, s.returnType, null, s.body);
         } else if (statement instanceof Stmt.PrintStmt s) {
-            typeOf(s.value);
+            for (Expr value : s.values) typeOf(value);
         } else if (statement instanceof Stmt.ExprStmt s) {
             typeOf(s.expr);
         }
@@ -160,6 +158,30 @@ public class SemanticAnalyzer {
             annotation(types.get(i));
             declare(names.get(i), null);
         }
+    }
+
+    // All function forms use the same scope and return/exit rules.
+    private void checkFunction(List<Token> params, List<Token> paramTypes, Token resultType,
+                               Expr expressionBody, Stmt blockBody) {
+        int savedLoops = loopDepth;
+        boolean savedFunction = inFunction;
+        Type savedReturn = returnType;
+        loopDepth = 0;
+        inFunction = true;
+        returnType = annotation(resultType);
+        scopes.push(new HashMap<>());
+        parameters(params, paramTypes);
+        if (expressionBody != null) {
+            compatible(returnType, typeOf(expressionBody), location(expressionBody), "Function result");
+        }
+        // Parameters and top-level locals share one function scope.
+        if (blockBody instanceof Stmt.BlockStmt block) {
+            for (Stmt statement : block.statements) check(statement);
+        } else check(blockBody);
+        scopes.pop();
+        loopDepth = savedLoops;
+        inFunction = savedFunction;
+        returnType = savedReturn;
     }
 
     private Type typeOf(Expr expression) {
@@ -228,43 +250,11 @@ public class SemanticAnalyzer {
             return Type.UNKNOWN;
         }
         if (expression instanceof Expr.LambdaExpr e) {
-            scopes.push(new HashMap<>());
-            parameters(e.params, e.paramTypes);
-            typeOf(e.body);
-            scopes.pop();
+            checkFunction(e.params, e.paramTypes, null, e.body, null);
             return Type.FUNCTION;
         }
         if (expression instanceof Expr.FuncExpr e) {
-            int savedLoops = loopDepth;
-            boolean savedFunction = inFunction;
-            Type savedReturn = returnType;
-
-            loopDepth = 0;
-            inFunction = true;
-            returnType = annotation(e.returnType);
-
-            // Create scope for function parameters and local variables
-            scopes.push(new HashMap<>());
-
-            parameters(e.params, e.paramTypes);
-
-            // Short function: func(x) => x + 1
-            if (e.expressionBody != null) {
-                Type actual = typeOf(e.expressionBody);
-                compatible(returnType, actual, location(e.expressionBody),
-                        "Function result");
-            }
-            // Multi-line function: func(x) is ... end
-            if (e.blockBody instanceof Stmt.BlockStmt block) {
-                // Parameters and local variables share the same scope
-                for (Stmt stmt : block.statements) {
-                    check(stmt);
-                }
-            }
-            scopes.pop();
-            loopDepth = savedLoops;
-            inFunction = savedFunction;
-            returnType = savedReturn;
+            checkFunction(e.params, e.paramTypes, e.returnType, e.expressionBody, e.blockBody);
             return Type.FUNCTION;
         }
         if (expression instanceof Expr.CallExpr e) {
@@ -278,23 +268,14 @@ public class SemanticAnalyzer {
             require(callee, Type.FUNCTION, location(e.callee), "Call target");
 
             if (e.callee instanceof Expr.IdentExpr id) {
-                // Search for the function in the available scopes
-                for (Map<String, Symbol> scope : scopes) {
-                    Symbol symbol = scope.get(id.name.lexeme);
-                    if (symbol == null) continue;
-                    // Named function declaration
-                    if (symbol.function != null) {
-                        Stmt.FuncDeclStmt function = symbol.function;
-                        arguments(args, function.paramTypes, id.name);
-                        return annotation(function.returnType);
-                    }
-                    // Function expression assigned to a variable
-                    if (symbol.functionExpr != null) {
-                        Expr.FuncExpr function = symbol.functionExpr;
-                        arguments(args, function.paramTypes, id.name);
-                        return annotation(function.returnType);
-                    }
-                    break;
+                Symbol symbol = findSymbol(id.name);
+                if (symbol != null && symbol.function != null) {
+                    arguments(args, symbol.function.paramTypes, id.name);
+                    return annotation(symbol.function.returnType);
+                }
+                if (symbol != null && symbol.functionExpr != null) {
+                    arguments(args, symbol.functionExpr.paramTypes, id.name);
+                    return annotation(symbol.functionExpr.returnType);
                 }
             }
             else if (e.callee instanceof Expr.LambdaExpr lambda) {
@@ -312,11 +293,9 @@ public class SemanticAnalyzer {
     private Type writable(Expr expression, Token at) {
         Type type = typeOf(expression);
         if (expression instanceof Expr.IdentExpr id) {
-            for (Map<String, Symbol> scope : scopes) {
-                Symbol symbol = scope.get(id.name.lexeme);
-                if (symbol == null) continue;
-                if (symbol.function != null) error(at, "Cannot assign to a named function declaration.");
-                break;
+            Symbol symbol = findSymbol(id.name);
+            if (symbol != null && symbol.function != null) {
+                error(at, "Cannot assign to a named function declaration.");
             }
         } else if (!(expression instanceof Expr.IndexExpr)) {
             error(at, "Assignment target must be a variable or array element (tuple members are read-only).");

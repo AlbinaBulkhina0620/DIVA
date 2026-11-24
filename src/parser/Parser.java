@@ -27,14 +27,14 @@ public class Parser {
         return new Stmt.Program(statements);
     }
 
-    // -----------------------------------------
     // Declarations & Statements
-    // -----------------------------------------
-
     private Stmt declaration() {
         try {
             if (match(TokenType.VAR)) return varDeclaration();
-            if (match(TokenType.FUNC)) return funcDeclaration();
+            if (check(TokenType.FUNC) && nextType() == TokenType.IDENT) {
+                advance();
+                return funcDeclaration();
+            }
             return statement();
         } catch (ParseError error) {
             synchronize();
@@ -43,15 +43,19 @@ public class Parser {
     }
 
     private Stmt varDeclaration() {
-        Token name = consume(TokenType.IDENT, "Expect variable name.");
-        Token type = null;
-        if (match(TokenType.COLON)) type = consumeType();
+        List<Stmt> declarations = new ArrayList<>();
+        do {
+            Token name = consume(TokenType.IDENT, "Expect variable name.");
+            Token type = null;
+            if (match(TokenType.COLON)) type = consumeType();
         
-        Expr init = null;
-        if (match(TokenType.ASSIGN)) init = expression();
+            Expr init = null;
+            if (match(TokenType.ASSIGN)) init = expression();
         
+            declarations.add(new Stmt.VarDeclStmt(name, type, init));
+        } while (match(TokenType.COMMA));
         consumeEndOfStatement();
-        return new Stmt.VarDeclStmt(name, type, init);
+        return declarations.size() == 1 ? declarations.get(0) : new Stmt.DeclarationGroup(declarations);
     }
 
     private Stmt funcDeclaration() {
@@ -179,8 +183,11 @@ public class Parser {
     }
 
     private Stmt forStatement() {
-        Token var = consume(TokenType.IDENT, "Expect variable name after 'for'.");
-        consume(TokenType.IN, "Expect 'in' after for variable.");
+        Token var = null;
+        if (check(TokenType.IDENT) && nextType() == TokenType.IN) {
+            var = advance();
+            advance();
+        }
         Expr iterable = expression();
 
         // Optional 'loop' keyword before the body
@@ -209,9 +216,10 @@ public class Parser {
     }
 
     private Stmt printStatement() {
-        Expr value = expression();
+        List<Expr> values = new ArrayList<>();
+        do { values.add(expression()); } while (match(TokenType.COMMA));
         consumeEndOfStatement();
-        return new Stmt.PrintStmt(value);
+        return new Stmt.PrintStmt(values);
     }
 
     private Stmt blockStatement() {
@@ -250,39 +258,23 @@ public class Parser {
         return body;
     }
 
-    // -----------------------------------------
     // Expressions
-    // -----------------------------------------
-
     private Expr expression() { return pipe(); }
 
     private Expr pipe() {
-        Expr expr = or();
-        while (match(TokenType.PIPE)) expr = new Expr.BinaryExpr(expr, previous(), or());
+        Expr expr = logical();
+        while (match(TokenType.PIPE)) expr = new Expr.BinaryExpr(expr, previous(), logical());
         return expr;
     }
 
-    private Expr or() {
-        Expr expr = xor();
-        while (match(TokenType.OR)) expr = new Expr.BinaryExpr(expr, previous(), xor());
+    // The assignment grammar puts and/or/xor at one precedence level.
+    private Expr logical() {
+        Expr expr = equality();
+        while (match(TokenType.OR, TokenType.AND, TokenType.XOR)) {
+            Token operator = previous();
+            expr = new Expr.BinaryExpr(expr, operator, equality());
+        }
         return expr;
-    }
-
-    private Expr xor() {
-        Expr expr = and();
-        while (match(TokenType.XOR)) expr = new Expr.BinaryExpr(expr, previous(), and());
-        return expr;
-    }
-
-    private Expr and() {
-        Expr expr = not();
-        while (match(TokenType.AND)) expr = new Expr.BinaryExpr(expr, previous(), not());
-        return expr;
-    }
-
-    private Expr not() {
-        if (match(TokenType.NOT)) return new Expr.UnaryExpr(previous(), not());
-        return equality();
     }
 
     private Expr equality() {
@@ -302,7 +294,13 @@ public class Parser {
                 // The right side of 'is' must be a type name
                 Token typeName = peek();
 
-                if (check(TokenType.TYPE_INT)
+                if (match(TokenType.LBRACKET)) {
+                    consume(TokenType.RBRACKET, "Expect ']' in array type indicator.");
+                    expr = new Expr.IsExpr(expr, new Token(TokenType.IDENT, "array", null, typeName.line, typeName.column));
+                } else if (match(TokenType.LBRACE)) {
+                    consume(TokenType.RBRACE, "Expect '}' in tuple type indicator.");
+                    expr = new Expr.IsExpr(expr, new Token(TokenType.IDENT, "tuple", null, typeName.line, typeName.column));
+                } else if (check(TokenType.TYPE_INT)
                         || check(TokenType.TYPE_REAL)
                         || check(TokenType.TYPE_STRING)
                         || check(TokenType.TYPE_BOOL)
@@ -352,10 +350,7 @@ public class Parser {
     }
 
     private Expr unary() {
-        if (match(TokenType.PLUS)) {
-            return unary();
-        }
-        if (match(TokenType.MINUS, TokenType.NOT)) {
+        if (match(TokenType.PLUS, TokenType.MINUS, TokenType.NOT)) {
             return new Expr.UnaryExpr(previous(), unary());
         }
         return call();
@@ -466,19 +461,20 @@ public class Parser {
     }
 
     private Expr functionLiteral() {
-        consume(TokenType.LPAREN, "Expect '(' after 'func'.");
         List<Token> params = new ArrayList<>();
         List<Token> paramTypes = new ArrayList<>();
-        if (!check(TokenType.RPAREN)) {
-            do {
-                params.add(consume(
-                        TokenType.IDENT,
-                        "Expect parameter name."
-                ));
-                paramTypes.add(match(TokenType.COLON) ? consumeType() : null);
-            } while (match(TokenType.COMMA));
+        if (match(TokenType.LPAREN)) {
+            if (!check(TokenType.RPAREN)) {
+                do {
+                    params.add(consume(
+                            TokenType.IDENT,
+                            "Expect parameter name."
+                    ));
+                    paramTypes.add(match(TokenType.COLON) ? consumeType() : null);
+                } while (match(TokenType.COMMA));
+            }
+            consume(TokenType.RPAREN, "Expect ')' after parameters.");
         }
-        consume(TokenType.RPAREN, "Expect ')' after parameters.");
 
         Token returnType = null;
         if (match(TokenType.COLON)) {
@@ -523,10 +519,7 @@ public class Parser {
         return new Expr.LambdaExpr(params, paramTypes, expression());
     }
 
-    // -----------------------------------------
     // Utility and Error Handling
-    // -----------------------------------------
-
     private boolean match(TokenType... types) {
         for (TokenType type : types) if (check(type)) { advance(); return true; }
         return false;
@@ -577,7 +570,7 @@ public class Parser {
 
     private boolean isStatementTerminator() {
         return check(TokenType.NEWLINE) || check(TokenType.SEMICOLON) || 
-               check(TokenType.END) || check(TokenType.ELSE) || isAtEnd();
+               check(TokenType.END) || check(TokenType.ELSE) || check(TokenType.RBRACE) || isAtEnd();
     }
 
     private void consumeEndOfStatement() {

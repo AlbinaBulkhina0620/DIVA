@@ -26,10 +26,17 @@ public class Main {
             }
         }
 
-        String source = file == null ? """
+        String source;
+        try {
+            source = file == null ? """
                 var x := 42
                 print x
                 """ : Files.readString(Path.of(file));
+        } catch (IOException | java.nio.file.InvalidPathException error) {
+            System.err.println("Cannot read source file: " + file + " (" + error.getMessage() + ")");
+            System.exit(1);
+            return;
+        }
 
         Lexer lexer = new Lexer(source);
         List<Token> tokens = lexer.tokenize();
@@ -69,10 +76,6 @@ public class Main {
         } catch (runtime.RuntimeError error) {
             System.err.println(error.getMessage());
             System.exit(1);
-        } catch (RuntimeException error) {
-            // Environment currently uses ordinary RuntimeException for name errors.
-            // Avoid concealing unrelated Java bugs as language-level errors.
-            throw error;
         }
     }
 
@@ -92,6 +95,12 @@ public class Main {
                 System.out.println("(Program");
                 indentLevel++;
                 for (Stmt s : ((Stmt.Program) stmt).statements) print(s);
+                indentLevel--;
+                printIndent(); System.out.println(")");
+            } else if (stmt instanceof Stmt.DeclarationGroup s) {
+                System.out.println("(Declarations");
+                indentLevel++;
+                for (Stmt declaration : s.declarations) print(declaration);
                 indentLevel--;
                 printIndent(); System.out.println(")");
             } else if (stmt instanceof Stmt.VarDeclStmt) {
@@ -119,7 +128,7 @@ public class Main {
                 printIndent(); System.out.println(")");
             } else if (stmt instanceof Stmt.ForStmt) {
                 Stmt.ForStmt s = (Stmt.ForStmt) stmt;
-                System.out.println("(For " + s.var.lexeme);
+                System.out.println("(For " + (s.var == null ? "" : s.var.lexeme));
                 indentLevel++;
                 print(s.iterable);
                 print(s.body);
@@ -137,7 +146,9 @@ public class Main {
                 if (((Stmt.ReturnStmt) stmt).value != null) { indentLevel++; print(((Stmt.ReturnStmt) stmt).value); indentLevel--; }
             } else if (stmt instanceof Stmt.PrintStmt) {
                 System.out.println("(Print");
-                indentLevel++; print(((Stmt.PrintStmt) stmt).value); indentLevel--;
+                indentLevel++;
+                for (Expr value : ((Stmt.PrintStmt) stmt).values) print(value);
+                indentLevel--;
                 printIndent(); System.out.println(")");
             } else if (stmt instanceof Stmt.FuncDeclStmt) {
                 Stmt.FuncDeclStmt s = (Stmt.FuncDeclStmt) stmt;
@@ -210,6 +221,10 @@ public class Main {
             } else if (expr instanceof Expr.LambdaExpr) {
                 System.out.println("(Lambda");
                 indentLevel++; print(((Expr.LambdaExpr) expr).body); indentLevel--;
+                printIndent(); System.out.println(")");
+            } else if (expr instanceof Expr.IsExpr e) {
+                System.out.println("(Is " + e.typeName.lexeme);
+                indentLevel++; print(e.value); indentLevel--;
                 printIndent(); System.out.println(")");
             } else if (expr instanceof Expr.FuncExpr e) {
                 System.out.println("(FuncExpr " + e.params.size() + " params");

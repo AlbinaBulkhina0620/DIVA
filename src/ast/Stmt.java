@@ -11,7 +11,17 @@ public interface Stmt {
     class LoopStmt implements Stmt { public final Stmt body; public LoopStmt(Stmt b) { body=b; } }
     class ExitStmt implements Stmt { public final Expr value; public ExitStmt(Expr v) { this.value=v; } }
     class ReturnStmt implements Stmt { public final Expr value; public ReturnStmt(Expr v) { this.value=v; } }
-    class PrintStmt implements Stmt { public final Expr value; public PrintStmt(Expr v) { this.value=v; } }
+    class PrintStmt implements Stmt {
+        public final Expr value;
+        public final List<Expr> values;
+        public PrintStmt(Expr v) { this(List.of(v)); }
+        public PrintStmt(List<Expr> v) { values=List.copyOf(v); value=values.get(0); }
+    }
+    // Several declarations in the current scope, without introducing a block.
+    class DeclarationGroup implements Stmt {
+        public final List<Stmt> declarations;
+        public DeclarationGroup(List<Stmt> declarations) { this.declarations=List.copyOf(declarations); }
+    }
     class FuncDeclStmt implements Stmt {
         public final Token name;
         public final List<Token> params;

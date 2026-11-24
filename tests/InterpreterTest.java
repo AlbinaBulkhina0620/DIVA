@@ -57,7 +57,9 @@ public class InterpreterTest {
         // Stage 3.4: boolean and comparison expressions
         test("Numeric comparisons", "print 2 < 3\nprint 3 >= 3\nprint 4 != 5", "true\ntrue\ntrue");
         test("Mixed numeric equality", "print 2 = 2.0\nprint 2 != 3.0", "true\ntrue");
-        test("Other equality", "print true = true\nprint none = none\nprint \"a\" != \"b\"", "true\ntrue\ntrue");
+        testRuntimeError("Boolean equality prohibited", "print true = true", "Operands must be numeric");
+        testRuntimeError("None equality prohibited", "print none = none", "Operands must be numeric");
+        testRuntimeError("String equality prohibited", "print \"a\" != \"b\"", "Operands must be numeric");
         test("Boolean operations", "print true and false\nprint true or false\nprint true xor false\nprint not false", "false\ntrue\ntrue\ntrue");
         test("And short circuit", "print false and (1 / 0 = 1)", "false");
         test("Or short circuit", "print true or (1 / 0 = 1)", "true");
